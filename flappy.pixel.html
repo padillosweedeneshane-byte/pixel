@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pixel Flap</title>
+    <style>
+        /* Global reset and body styling */
+        body {
+            background: #333; /* Dark background for the game container to pop */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: monospace; /* Ensures a retro, pixelated font look */
+            user-select: none; /* Prevent text selection during gameplay */
+        }
+
+        /* Styling the canvas container to enhance the pixel feel */
+        #gameCanvas {
+            image-rendering: optimizeSpeed; /* Helps maintain sharp pixels */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            border: 8px solid #1c1b1a; /* Thick border simulating an old CRT/Game box */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            background-color: #79e6ff; /* Sky background color (pixelated blue) */
+        }
+
+        /* Optional overlay for instructions/Game Over text */
+        #game-container {
+            position: relative;
+            border: 1px solid transparent; /* For centering the canvas if needed */
+        }
+
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+
+<script>
+    // --- CANVAS SETUP AND CONSTANTS ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Game parameters (Adjusting these changes the difficulty/feel)
+    const GRAVITY = 0.8;
+    const JUMP_STRENGTH = -14;
+    const PIPE_WIDTH = 60;
+    const PIPE_GAP = 150;
+    const PIPE_SPEED = 3;
+
+    // Player object
+    let player = {
+        x: 50,
+        y: canvas.height / 2 - 20,
+        width: 30,
+        height: 30,
+        velocity: 0,
+        jump: function() {
+            this.velocity = JUMP_STRENGTH;
+        }
+    };
+
+    // Game state variables
+    let pipes = [];
+    let score = 0;
+    let gameLoopId;
+    let isPlaying = false;
+    let frameCounter = 0;
+    const SPAWN_RATE = 120; // Spawn a pipe every X frames (e.g., 120/60fps = 2 seconds)
+
+    // --- PIXEL ART DRAWING FUNCTIONS ---
+
+    /**
+     * Draws a simple blocky character for the player.
+     * This function uses basic rectangles to simulate pixel art sprites.
+     */
+    function drawPlayer() {
+        ctx.fillStyle = '#ffc300'; // Pixel gold color
+        // Body (main square)
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+
+        // Simple pixel eyes (2x2 blocks)
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(player.x + 5, player.y + 5, 3, 3); // Left eye
+        ctx.fillRect(player.x + 22, player.y + 5, 3, 3); // Right eye
+
+        // Simple beak/head accent (1 block)
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillRect(player.x + 27, player.y + 8, 4, 4);
+    }
+
+    /**
+     * Draws a pixelated pipe set.
+     */
+    function drawPipe(pipe) {
+        // Pipe Color (Dark Green)
+        const color = '#556b2f';
+        ctx.fillStyle = color;
+
+        // Top Pipe
+        ctx.fillRect(pipe.x, 0, PIPE_WIDTH, pipe.topHeight);
+
+        // Bottom Pipe
+        ctx.fillRect(pipe.x, canvas.height - pipe.bottomHeight, PIPE_WIDTH, pipe.bottomHeight);
+
+        // Adding a simple pixelated texture effect (optional but adds depth)
+        ctx.fillStyle = '#415226'; // Darker green for shadow/detail
+        for (let i = 0; i < 5; i++) {
+            // Top pipe details
+            ctx.fillRect(pipe.x + 5, i * 10 + 3, PIPE_WIDTH - 10, 2);
+             // Bottom pipe details
+            ctx.fillRect(pipe.x + 5, canvas.height - (i * 10) - 3, PIPE_WIDTH - 10, 2);
+        }
+    }
+
+    /**
+     * Draws the ground/floor pixelated aesthetic.
+     */
+    function drawGround() {
+        const groundHeight = 50;
+        // Ground Color (Pixel brown)
+        ctx.fillStyle = '#a0522d';
+        ctx.fillRect(0, canvas.height - groundHeight, canvas.width, groundHeight);
+
+        // Adding pixelated texture to the ground
+        for (let x = 0; x < canvas.width; x += 8) {
+            ctx.fillStyle = '#8b4513'; // Darker shadow pixels
+            ctx.fillRect(x, canvas.height - groundHeight + 2, 2, 2);
+        }
+
+        // Simple pixelated grass line
+        ctx.fillStyle = '#006400';
+        for (let x = 0; x < canvas.width; x += 8) {
+             ctx.fillRect(x - 2, canvas.height - groundHeight + 1, 4, 3);
+        }
+    }
+
+    /**
+     * Draws the score text in a retro pixel font style.
+     */
+    function drawScore() {
+        // Set font to be mono-spaced and blocky for maximum pixel effect
+        ctx.font = 'bold 40px "Press Start 2P", monospace';
+
+        // Score Background Box (Pixelated)
+        ctx.fillStyle = '#000';
+        ctx.fillRect(5, 10, 150, 50);
+        
+        ctx.fillStyle = '#ffeb3b'; // Bright pixel yellow for the score number
+        ctx.fillText(score, 10, 45);
+    }
+
+    // --- GAME LOGIC FUNCTIONS ---
+
+    /**
+     * Handles player movement (gravity and velocity update).
+     */
+    function updatePlayer() {
+        player.velocity += GRAVITY;
+        player.y += player.velocity;
+        player.x = 50; // Keep x constant
+        
+        // Limit vertical velocity for dramatic falls, but keep it gravity-driven
+        if (player.velocity > 25) player.velocity = 25;
+    }
+
+    /**
+     * Creates new pipes and manages movement.
+     */
+    function updatePipes() {
+        frameCounter++;
+
+        // 1. Spawning Logic: Check if it's time to spawn a new pair of pipes
+        if (frameCounter % SPAWN_RATE === 0) {
+            // Randomly determines the center point for the gap
+            const minHeight = 50;
+            const maxHeight = canvas.height - 100 - PIPE_GAP + 50;
+            let topHeight = Math.random() * (maxHeight - minHeight) + minHeight;
+
+            // Create a new pipe set object
+            pipes.push({
+                x: canvas.width,
+                topHeight: topHeight,
+                bottomHeight: canvas.height - 50 - topHeight - PIPE_GAP, // Ground height (50) + gap
+                scored: false
+            });
+        }
+
+        // 2. Moving and Removing Pipes
+        for (let i = pipes.length - 1; i >= 0; i--) {
+            pipes[i].x -= PIPE_SPEED;
+
+            // Check if pipe has moved off screen
+            if (pipes[i].x + PIPE_WIDTH < 0) {
+                pipes.splice(i, 1); // Remove the pipe
+            } else {
+                 // Scoring logic: If player passed this pipe and hasn't scored yet
+                const centerCheck = player.x + player.width;
+                if (!pipes[i].scored && centerCheck > pipes[i].x + PIPE_WIDTH) {
+                    score++;
+                    pipes[i].scored = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * Checks for collisions (ground, ceiling, and pipes).
+     */
+    function checkCollision() {
+        // 1. Ground/Ceiling Collision
+        const groundLevel = canvas.height - 50;
+        if (player.y + player.height >= groundLevel || player.y <= 0) {
+            return true; // Hit the floor or ceiling
+        }
+
+        // 2. Pipe Collision
+        for (let p of pipes) {
+            const pipeXStart = p.x;
+            const pipeXEnd = p.x + PIPE_WIDTH;
+
+            // Check if player horizontal position overlaps with current pipe
+            if (player.x < pipeXEnd && player.x + player.width > pipeXStart) {
+                // Top pipe collision check
+                if (player.y + player.height > 0 && player.y < p.topHeight) {
+                    return true; // Hit the top pipe
+                }
+                 // Bottom pipe collision check
+                if (player.y < canvas.height - 50 && player.y + player.height > canvas.height - 50 - p.bottomHeight) {
+                    return true; // Hit the bottom pipe
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The main game loop that updates and redraws all elements.
+     */
+    function gameTick() {
+        if (!isPlaying) return;
+
+        // 1. Clear Canvas (Draw the background sky/pixels)
+        ctx.fillStyle = '#79e6ff'; // Sky color
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 2. Update Physics and Pipes
+        updatePlayer();
+        updatePipes();
+
+        // 3. Check Game Over State
+        if (checkCollision()) {
+            gameOver();
+            return;
+        }
+
+        // 4. Draw Elements
+        drawGround(); // Must be drawn first so other elements sit on it
+        pipes.forEach(p => drawPipe(p));
+        drawPlayer();
+        drawScore();
+
+        // Loop continues
+        gameLoopId = requestAnimationFrame(gameTick);
+    }
+
+    /**
+     * Starts the game sequence.
+     */
+    function startGame() {
+        if (isPlaying) return; // Prevent multiple starts
+
+        player.y = canvas.height / 2 - player.height / 2;
+        player.velocity = 0;
+        pipes = [];
+        score = 0;
+        frameCounter = 0;
+        isPlaying = true;
+
+        gameTick();
+    }
+
+    /**
+     * Ends the game and displays the score.
+     */
+    function gameOver() {
+        isPlaying = false;
+        cancelAnimationFrame(gameLoopId);
+
+        // Draw Game Over Screen (Pixel style)
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; // Semi-transparent dark overlay
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.font = 'bold 48px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffeb3b';
+        ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 20);
+
+        ctx.font = 'bold 24px monospace';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 30);
+
+        ctx.fillStyle = '#ffeb3b';
+        ctx.font = 'bold 18px monospace';
+        ctx.fillText("Press SPACE to Restart", canvas.width / 2, canvas.height / 2 + 70);
+
+    }
+
+
+    // --- INPUT HANDLERS ---
+
+    /**
+     * Handles both mouse clicks and keyboard presses (Space/Up arrow).
+     */
+    function handleJump() {
+        if (!isPlaying) {
+            // If the game is over or hasn't started, start it.
+            startGame();
+        } else {
+             // Otherwise, just jump!
+            player.jump();
+        }
+    }
+
+    document.addEventListener('mousedown', handleJump);
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' || e.key === 'ArrowUp') {
+            handleJump();
+        }
+    });
+
+
+    // Initial prompt draw when the page loads
+    function initialDraw() {
+        ctx.fillStyle = '#79e6ff'; // Sky color background
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawGround();
+        drawPlayer();
+        drawScore();
+
+        // Initial instruction text (Pixel style)
+        ctx.font = 'bold 24px monospace';
+        ctx.fillStyle = '#ffeb3b';
+        ctx.textAlign = 'center';
+        ctx.fillText("PIXEL FLAP", canvas.width / 2, 60);
+
+        ctx.font = '18px monospace';
+        ctx.fillText("Click or Press SPACE to Jump", canvas.width / 2, 100);
+    }
+
+
+    // Start the scene setup immediately
+    initialDraw();
+</script>
+
+</body>
+</html>
